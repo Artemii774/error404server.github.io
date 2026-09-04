@@ -1,0 +1,38 @@
+<!DOCTYPE html>
+<html lang="ru">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Cloud Storage</title>
+    <link rel="stylesheet" href="style.css">
+</head>
+
+<body>
+
+<header>
+    <h1>☁️ Cloud Storage</h1>
+    <span id="status">Проверка сервера...</span>
+</header>
+
+<main>
+
+    <section class="toolbar">
+        <button id="uploadButton">⬆️ Загрузить файл</button>
+        <button id="refreshButton">🔄 Обновить</button>
+
+        <input type="file" id="fileInput" hidden>
+    </section>
+
+    <section class="storage">
+        <h2>Мои файлы</h2>
+        <div id="fileList">
+            Загрузка...
+        </div>
+    </section>
+
+</main>
+
+<script src="app.js"></script>
+
+</body>
+</html>
