@@ -3,6 +3,7 @@ import secrets
 import shutil
 from pathlib import Path
 from datetime import datetime
+import requests
 
 from flask import (
     Flask,
@@ -10,7 +11,8 @@ from flask import (
     jsonify,
     send_file,
     redirect,
-    session
+    session,
+    url_for
 )
 
 from flask_cors import CORS
@@ -27,13 +29,24 @@ app.secret_key = os.environ.get(
     secrets.token_hex(32)
 )
 
+# Разрешаем CORS для вашего фронтенда на GitHub Pages и локальной разработки
 CORS(
     app,
     supports_credentials=True,
     origins=[
-        "https://artemii774.github.io"
+        "https://artemii774.github.io",
+        "http://localhost:5500",
+        "http://127.0.0.1:5500"
     ]
 )
+
+
+# ======================================================
+# GOOGLE OAUTH CONFIG
+# ======================================================
+
+GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
+GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 
 
 # ======================================================
@@ -105,8 +118,7 @@ def safe_user_path(
     relative_path=""
 ):
 
-    user_root =
-        safe_user_directory(user_id)
+    user_root = safe_user_directory(user_id)
 
     target = (
         user_root /
@@ -128,8 +140,7 @@ def safe_user_path(
 
 def require_user():
 
-    user_id =
-        session.get("user_id")
+    user_id = session.get("user_id")
 
     if not user_id:
 
@@ -167,23 +178,78 @@ def index():
 
 @app.route("/auth/google")
 def google_login():
+    if not GOOGLE_CLIENT_ID:
+        return jsonify({
+            "error": "Google OAuth is not configured on server (missing GOOGLE_CLIENT_ID)."
+        }), 500
 
-    return jsonify({
-        "error":
-            "Google OAuth is not configured yet.",
-        "message":
-            "Set Google OAuth credentials in server.py."
-    }), 501
+    redirect_uri = request.host_url.rstrip("/") + "/auth/google/callback"
+    google_auth_url = (
+        "https://accounts.google.com/o/oauth2/v2/auth?"
+        f"client_id={GOOGLE_CLIENT_ID}&"
+        f"redirect_uri={redirect_uri}&"
+        "response_type=code&"
+        "scope=openid%20email%20profile"
+    )
+    return redirect(google_auth_url)
+
+
+@app.route("/auth/google/callback")
+def google_callback():
+    code = request.args.get("code")
+    if not code:
+        return redirect("https://artemii774.github.io/?error=no_code")
+
+    redirect_uri = request.host_url.rstrip("/") + "/auth/google/callback"
+
+    token_url = "https://oauth2.googleapis.com/token"
+    token_data = {
+        "code": code,
+        "client_id": GOOGLE_CLIENT_ID,
+        "client_secret": GOOGLE_CLIENT_SECRET,
+        "redirect_uri": redirect_uri,
+        "grant_type": "authorization_code"
+    }
+
+    token_res = requests.post(token_url, data=token_data)
+    if token_res.status_code != 200:
+        return redirect("https://artemii774.github.io/?error=token_failed")
+
+    token_json = token_res.json()
+    access_token = token_json.get("access_token")
+
+    user_info_res = requests.get(
+        "https://www.googleapis.com/oauth2/v3/userinfo",
+        headers={"Authorization": f"Bearer {access_token}"}
+    )
+
+    if user_info_res.status_code != 200:
+        return redirect("https://artemii774.github.io/?error=userinfo_failed")
+
+    user_info = user_info_res.json()
+    google_id = user_info.get("sub")
+    email = user_info.get("email")
+
+    if not google_id or not email:
+        return redirect("https://artemii774.github.io/?error=invalid_user")
+
+    session["user_id"] = google_id
+    session["email"] = email
+
+    # Сохраняем почту пользователя в специальный файл для админки
+    user_dir = safe_user_directory(google_id)
+    email_file = user_dir / ".email"
+    email_file.write_text(email, encoding="utf-8")
+
+    # Перенаправляем обратно на ваш фронтенд на GitHub Pages
+    return redirect("https://artemii774.github.io/")
 
 
 @app.route("/auth/me")
 def auth_me():
 
-    user_id =
-        session.get("user_id")
-
-    email =
-        session.get("email")
+    user_id = session.get("user_id")
+    email = session.get("email")
 
 
     if not user_id:
@@ -224,8 +290,7 @@ def auth_logout():
 @app.route("/files")
 def list_files():
 
-    user_id =
-        require_user()
+    user_id = require_user()
 
     if not user_id:
 
@@ -235,20 +300,18 @@ def list_files():
         }), 401
 
 
-    requested_folder =
-        request.args.get(
-            "folder",
-            ""
-        )
+    requested_folder = request.args.get(
+        "folder",
+        ""
+    )
 
 
     try:
 
-        directory =
-            safe_user_path(
-                user_id,
-                requested_folder
-            )
+        directory = safe_user_path(
+            user_id,
+            requested_folder
+        )
 
     except ValueError:
 
@@ -270,12 +333,11 @@ def list_files():
 
         try:
 
-            relative =
-                item.relative_to(
-                    safe_user_directory(
-                        user_id
-                    )
+            relative = item.relative_to(
+                safe_user_directory(
+                    user_id
                 )
+            )
 
         except ValueError:
 
@@ -328,8 +390,7 @@ def list_files():
 )
 def upload():
 
-    user_id =
-        require_user()
+    user_id = require_user()
 
     if not user_id:
 
@@ -339,10 +400,9 @@ def upload():
         }), 401
 
 
-    uploaded_file =
-        request.files.get(
-            "file"
-        )
+    uploaded_file = request.files.get(
+        "file"
+    )
 
 
     if not uploaded_file:
@@ -353,20 +413,18 @@ def upload():
         }), 400
 
 
-    folder =
-        request.form.get(
-            "folder",
-            ""
-        )
+    folder = request.form.get(
+        "folder",
+        ""
+    )
 
 
     try:
 
-        directory =
-            safe_user_path(
-                user_id,
-                folder
-            )
+        directory = safe_user_path(
+            user_id,
+            folder
+        )
 
         directory.mkdir(
             parents=True,
@@ -374,14 +432,13 @@ def upload():
         )
 
 
-        target =
-            safe_user_path(
-                user_id,
-                str(
-                    Path(folder) /
-                    uploaded_file.filename
-                )
+        target = safe_user_path(
+            user_id,
+            str(
+                Path(folder) /
+                uploaded_file.filename
             )
+        )
 
 
     except ValueError:
@@ -413,8 +470,7 @@ def upload():
 @app.route("/download")
 def download():
 
-    user_id =
-        require_user()
+    user_id = require_user()
 
     if not user_id:
 
@@ -424,20 +480,18 @@ def download():
         }), 401
 
 
-    relative_path =
-        request.args.get(
-            "path",
-            ""
-        )
+    relative_path = request.args.get(
+        "path",
+        ""
+    )
 
 
     try:
 
-        target =
-            safe_user_path(
-                user_id,
-                relative_path
-            )
+        target = safe_user_path(
+            user_id,
+            relative_path
+        )
 
     except ValueError:
 
@@ -471,8 +525,7 @@ def download():
 )
 def delete_file():
 
-    user_id =
-        require_user()
+    user_id = require_user()
 
     if not user_id:
 
@@ -482,20 +535,18 @@ def delete_file():
         }), 401
 
 
-    relative_path =
-        request.args.get(
-            "path",
-            ""
-        )
+    relative_path = request.args.get(
+        "path",
+        ""
+    )
 
 
     try:
 
-        target =
-            safe_user_path(
-                user_id,
-                relative_path
-            )
+        target = safe_user_path(
+            user_id,
+            relative_path
+        )
 
     except ValueError:
 
@@ -540,8 +591,7 @@ def delete_file():
 )
 def create_folder():
 
-    user_id =
-        require_user()
+    user_id = require_user()
 
     if not user_id:
 
@@ -551,24 +601,21 @@ def create_folder():
         }), 401
 
 
-    data =
-        request.get_json(
-            silent=True
-        ) or {}
+    data = request.get_json(
+        silent=True
+    ) or {}
 
 
-    name =
-        data.get(
-            "name",
-            ""
-        )
+    name = data.get(
+        "name",
+        ""
+    )
 
 
-    folder =
-        data.get(
-            "folder",
-            ""
-        )
+    folder = data.get(
+        "folder",
+        ""
+    )
 
 
     if not name:
@@ -581,14 +628,13 @@ def create_folder():
 
     try:
 
-        target =
-            safe_user_path(
-                user_id,
-                str(
-                    Path(folder) /
-                    name
-                )
+        target = safe_user_path(
+            user_id,
+            str(
+                Path(folder) /
+                name
             )
+        )
 
         target.mkdir(
             parents=False,
@@ -625,8 +671,7 @@ def create_folder():
 @app.route("/file-info")
 def file_info():
 
-    user_id =
-        require_user()
+    user_id = require_user()
 
     if not user_id:
 
@@ -636,20 +681,18 @@ def file_info():
         }), 401
 
 
-    relative_path =
-        request.args.get(
-            "path",
-            ""
-        )
+    relative_path = request.args.get(
+        "path",
+        ""
+    )
 
 
     try:
 
-        target =
-            safe_user_path(
-                user_id,
-                relative_path
-            )
+        target = safe_user_path(
+            user_id,
+            relative_path
+        )
 
     except ValueError:
 
@@ -667,8 +710,7 @@ def file_info():
         }), 404
 
 
-    stat =
-        target.stat()
+    stat = target.stat()
 
 
     return jsonify({
@@ -709,17 +751,15 @@ def admin_login():
         }), 500
 
 
-    data =
-        request.get_json(
-            silent=True
-        ) or {}
+    data = request.get_json(
+        silent=True
+    ) or {}
 
 
-    password =
-        data.get(
-            "password",
-            ""
-        )
+    password = data.get(
+        "password",
+        ""
+    )
 
 
     if not secrets.compare_digest(
@@ -768,10 +808,6 @@ def admin_stats():
             continue
 
 
-        # ВАЖНО:
-        # Здесь сервер считает только размеры.
-        # Названия файлов сюда не попадают.
-
         for file in user_directory.rglob("*"):
 
             if file.is_file():
@@ -787,18 +823,16 @@ def admin_stats():
                     pass
 
 
-        email_file =
-            user_directory / ".email"
+        email_file = user_directory / ".email"
 
 
         if email_file.exists():
 
             try:
 
-                email =
-                    email_file.read_text(
-                        encoding="utf-8"
-                    ).strip()
+                email = email_file.read_text(
+                    encoding="utf-8"
+                ).strip()
 
                 if email:
                     user_emails.append(
@@ -810,12 +844,11 @@ def admin_stats():
                 pass
 
 
-    free =
-        max(
-            0,
-            TOTAL_STORAGE -
-            total_used
-        )
+    free = max(
+        0,
+        TOTAL_STORAGE -
+        total_used
+    )
 
 
     return jsonify({
