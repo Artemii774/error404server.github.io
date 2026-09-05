@@ -20,19 +20,35 @@
 
 <main>
 
+    <!-- LOGIN -->
     <section id="loginSection" class="login-card">
         <div class="login-icon">☁️</div>
 
         <h2>Добро пожаловать</h2>
-        <p>Войдите через Google, чтобы получить своё личное хранилище.</p>
+        <p>Введите ваш Gmail и имя пользователя, чтобы открыть хранилище.</p>
 
-        <button id="googleLoginButton" class="google-button">
-            <span>G</span>
-            Войти через Google
-        </button>
+        <form id="loginForm" class="login-form">
+            <input 
+                type="email" 
+                id="emailInput" 
+                placeholder="Ваш Gmail (например: user@gmail.com)" 
+                required 
+                autocomplete="email"
+            >
+            <input 
+                type="text" 
+                id="usernameInput" 
+                placeholder="Имя (для рабочего стола)" 
+                autocomplete="nickname"
+            >
+            <button type="submit" class="google-button">
+                Войти в хранилище
+            </button>
+        </form>
     </section>
 
 
+    <!-- CLOUD -->
     <section id="cloudSection" class="hidden">
 
         <section class="toolbar">
@@ -58,12 +74,14 @@
         </section>
 
 
+        <!-- CURRENT FOLDER -->
         <section class="breadcrumb-card">
             <span>📂</span>
             <span id="currentPath">Мои файлы</span>
         </section>
 
 
+        <!-- FILES -->
         <section class="storage">
 
             <div class="storage-header">
@@ -88,11 +106,13 @@
 </main>
 
 
+<!-- ADMIN LINK -->
 <button id="adminLink" class="admin-link">
     Администратор
 </button>
 
 
+<!-- ADMIN MODAL -->
 <div id="adminModal" class="modal hidden">
 
     <div class="modal-content">
