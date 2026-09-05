@@ -3,16 +3,13 @@ import secrets
 import shutil
 from pathlib import Path
 from datetime import datetime
-import requests
 
 from flask import (
     Flask,
     request,
     jsonify,
     send_file,
-    redirect,
-    session,
-    url_for
+    session
 )
 
 from flask_cors import CORS
@@ -29,7 +26,6 @@ app.secret_key = os.environ.get(
     secrets.token_hex(32)
 )
 
-# Разрешаем CORS для вашего фронтенда на GitHub Pages и локальной разработки
 CORS(
     app,
     supports_credentials=True,
@@ -39,14 +35,6 @@ CORS(
         "http://127.0.0.1:5500"
     ]
 )
-
-
-# ======================================================
-# GOOGLE OAUTH CONFIG
-# ======================================================
-
-GOOGLE_CLIENT_ID = os.environ.get("GOOGLE_CLIENT_ID")
-GOOGLE_CLIENT_SECRET = os.environ.get("GOOGLE_CLIENT_SECRET")
 
 
 # ======================================================
@@ -173,76 +161,42 @@ def index():
 
 
 # ======================================================
-# GOOGLE AUTH
+# SIMPLE LOGIN (GMAIL + USERNAME)
 # ======================================================
 
-@app.route("/auth/google")
-def google_login():
-    if not GOOGLE_CLIENT_ID:
+@app.route(
+    "/auth/login",
+    methods=["POST"]
+)
+def login():
+
+    data = request.get_json(silent=True) or {}
+    email = data.get("email", "").strip()
+    username = data.get("username", "").strip()
+
+    if not email or "@" not in email:
         return jsonify({
-            "error": "Google OAuth is not configured on server (missing GOOGLE_CLIENT_ID)."
-        }), 500
+            "error": "Valid Gmail required"
+        }), 400
 
-    redirect_uri = request.host_url.rstrip("/") + "/auth/google/callback"
-    google_auth_url = (
-        "https://accounts.google.com/o/oauth2/v2/auth?"
-        f"client_id={GOOGLE_CLIENT_ID}&"
-        f"redirect_uri={redirect_uri}&"
-        "response_type=code&"
-        "scope=openid%20email%20profile"
-    )
-    return redirect(google_auth_url)
+    if not username:
+        username = email.split("@")[0]
 
-
-@app.route("/auth/google/callback")
-def google_callback():
-    code = request.args.get("code")
-    if not code:
-        return redirect("https://artemii774.github.io/?error=no_code")
-
-    redirect_uri = request.host_url.rstrip("/") + "/auth/google/callback"
-
-    token_url = "https://oauth2.googleapis.com/token"
-    token_data = {
-        "code": code,
-        "client_id": GOOGLE_CLIENT_ID,
-        "client_secret": GOOGLE_CLIENT_SECRET,
-        "redirect_uri": redirect_uri,
-        "grant_type": "authorization_code"
-    }
-
-    token_res = requests.post(token_url, data=token_data)
-    if token_res.status_code != 200:
-        return redirect("https://artemii774.github.io/?error=token_failed")
-
-    token_json = token_res.json()
-    access_token = token_json.get("access_token")
-
-    user_info_res = requests.get(
-        "https://www.googleapis.com/oauth2/v3/userinfo",
-        headers={"Authorization": f"Bearer {access_token}"}
-    )
-
-    if user_info_res.status_code != 200:
-        return redirect("https://artemii774.github.io/?error=userinfo_failed")
-
-    user_info = user_info_res.json()
-    google_id = user_info.get("sub")
-    email = user_info.get("email")
-
-    if not google_id or not email:
-        return redirect("https://artemii774.github.io/?error=invalid_user")
-
-    session["user_id"] = google_id
+    # Используем сам email как идентификатор (название папки)
+    session["user_id"] = email
     session["email"] = email
+    session["username"] = username
 
-    # Сохраняем почту пользователя в специальный файл для админки
-    user_dir = safe_user_directory(google_id)
+    # Создаем папку пользователя и записываем email
+    user_dir = safe_user_directory(email)
     email_file = user_dir / ".email"
     email_file.write_text(email, encoding="utf-8")
 
-    # Перенаправляем обратно на ваш фронтенд на GitHub Pages
-    return redirect("https://artemii774.github.io/")
+    return jsonify({
+        "status": "logged_in",
+        "email": email,
+        "username": username
+    })
 
 
 @app.route("/auth/me")
@@ -250,6 +204,7 @@ def auth_me():
 
     user_id = session.get("user_id")
     email = session.get("email")
+    username = session.get("username", email)
 
 
     if not user_id:
@@ -265,7 +220,10 @@ def auth_me():
             True,
 
         "email":
-            email
+            email,
+
+        "username":
+            username
     })
 
 
