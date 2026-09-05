@@ -1,0 +1,242 @@
+* {
+    box-sizing: border-box;
+}
+
+body {
+    margin: 0;
+    font-family: Arial, sans-serif;
+    background: #111827;
+    color: white;
+}
+
+header {
+    padding: 20px 30px;
+    background: #1f2937;
+
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+
+header h1 {
+    margin: 0;
+}
+
+#status {
+    color: #22c55e;
+}
+
+main {
+    max-width: 1000px;
+    margin: 40px auto;
+    padding: 0 20px;
+}
+
+.toolbar {
+    display: flex;
+    gap: 10px;
+    margin-bottom: 30px;
+}
+
+button {
+    padding: 11px 16px;
+
+    border: none;
+    border-radius: 8px;
+
+    cursor: pointer;
+
+    background: #2563eb;
+    color: white;
+
+    font-size: 14px;
+
+    transition: 0.2s;
+}
+
+button:hover {
+    transform: translateY(-1px);
+    opacity: 0.9;
+}
+
+button:disabled {
+    opacity: 0.6;
+    cursor: wait;
+}
+
+.storage {
+    background: #1f2937;
+
+    border-radius: 14px;
+
+    padding: 25px;
+}
+
+.storage h2 {
+    margin-top: 0;
+}
+
+
+/* ==========================
+   FILE
+========================== */
+
+.file {
+    display: flex;
+
+    justify-content: space-between;
+    align-items: center;
+
+    gap: 20px;
+
+    padding: 15px;
+
+    border-bottom: 1px solid #374151;
+}
+
+.file:last-child {
+    border-bottom: none;
+}
+
+
+.file-info {
+    display: flex;
+
+    align-items: center;
+
+    gap: 14px;
+
+    min-width: 0;
+}
+
+
+.file-icon {
+    font-size: 30px;
+}
+
+
+.file-name {
+    font-size: 16px;
+
+    word-break: break-word;
+}
+
+
+.file-size {
+    margin-top: 4px;
+
+    color: #9ca3af;
+
+    font-size: 13px;
+}
+
+
+/* ==========================
+   BUTTONS
+========================== */
+
+.file-actions {
+    display: flex;
+
+    gap: 8px;
+
+    flex-shrink: 0;
+}
+
+
+.download {
+    background: #2563eb;
+}
+
+
+.delete {
+    background: #dc2626;
+}
+
+.delete:hover {
+    background: #b91c1c;
+}
+
+
+/* ==========================
+   EMPTY
+========================== */
+
+.empty {
+    text-align: center;
+
+    padding: 50px 20px;
+
+    color: #9ca3af;
+
+    font-size: 16px;
+}
+
+
+/* ==========================
+   LOADING
+========================== */
+
+.loading {
+    text-align: center;
+
+    padding: 40px;
+
+    color: #9ca3af;
+}
+
+
+/* ==========================
+   ERROR
+========================== */
+
+.error {
+    text-align: center;
+
+    padding: 30px;
+
+    color: #f87171;
+}
+
+.error small {
+    color: #9ca3af;
+}
+
+
+/* ==========================
+   MOBILE
+========================== */
+
+@media (max-width: 650px) {
+
+    header {
+        flex-direction: column;
+
+        align-items: flex-start;
+
+        gap: 10px;
+    }
+
+
+    .toolbar {
+        flex-direction: column;
+    }
+
+
+    .file {
+        flex-direction: column;
+
+        align-items: flex-start;
+    }
+
+
+    .file-actions {
+        width: 100%;
+    }
+
+
+    .file-actions button {
+        flex: 1;
+    }
+
+}
