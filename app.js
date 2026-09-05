@@ -1,399 +1,281 @@
-// ======================================================
-// API
-// ======================================================
+import os
+import secrets
+import shutil
+from pathlib import Path
+from datetime import datetime
+from flask import Flask, request, jsonify, send_file, session
+from flask_cors import CORS
 
-const API = "https://proof-screens-atm-weights.trycloudflare.com";
+app = Flask(__name__)
+app.secret_key = os.environ.get("FLASK_SECRET_KEY", secrets.token_hex(32))
 
-const status = document.getElementById("status");
-const loginSection = document.getElementById("loginSection");
-const cloudSection = document.getElementById("cloudSection");
-const loginForm = document.getElementById("loginForm");
-const emailInput = document.getElementById("emailInput");
-const usernameInput = document.getElementById("usernameInput");
-const logoutButton = document.getElementById("logoutButton");
-const userInfo = document.getElementById("userInfo");
-const fileList = document.getElementById("fileList");
-const uploadButton = document.getElementById("uploadButton");
-const refreshButton = document.getElementById("refreshButton");
-const folderButton = document.getElementById("folderButton");
-const fileInput = document.getElementById("fileInput");
-const currentPath = document.getElementById("currentPath");
-const userStorage = document.getElementById("userStorage");
+CORS(app, supports_credentials=True, origins=[
+    "https://artemii774.github.io",
+    "http://localhost:5500",
+    "http://127.0.0.1:5500"
+])
 
-let currentUser = null;
-let currentFolder = "";
+STORAGE_ROOT = Path("/mnt/ssd/server-files")
+USERS_ROOT = STORAGE_ROOT / "users"
+TOTAL_STORAGE = 500 * 1024 ** 3
 
-// ======================================================
-// SERVER CHECK
-// ======================================================
+USERS_ROOT.mkdir(parents=True, exist_ok=True)
 
-async function checkServer() {
-    try {
-        const response = await fetch(`${API}/`);
-        if (!response.ok) throw new Error("Server error");
-        status.textContent = "● Сервер онлайн";
-        status.style.color = "#22c55e";
-    } catch (error) {
-        status.textContent = "● Сервер недоступен";
-        status.style.color = "#ef4444";
-    }
-}
+ADMIN_PASSWORD = os.environ.get("CLOUD_ADMIN_PASSWORD")
 
-// ======================================================
-// LOGIN FORM HANDLER
-// ======================================================
+def safe_user_directory(user_id):
+    directory = (USERS_ROOT / user_id).resolve()
+    root = USERS_ROOT.resolve()
+    if directory != root and root not in directory.parents:
+        raise ValueError("Invalid user directory")
+    directory.mkdir(parents=True, exist_ok=True)
+    return directory
 
-loginForm.addEventListener("submit", async (e) => {
-    e.preventDefault();
-    const email = emailInput.value.trim();
-    const username = usernameInput.value.trim();
+def safe_user_path(user_id, relative_path=""):
+    user_root = safe_user_directory(user_id)
+    target = (user_root / relative_path).resolve()
+    if target != user_root and user_root not in target.parents:
+        raise ValueError("Path traversal blocked")
+    return target
 
-    if (!email) return;
+def require_user():
+    return session.get("user_id")
 
-    try {
-        const response = await fetch(`${API}/auth/login`, {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ email, username })
-        });
+def require_admin():
+    return session.get("admin") is True
 
-        if (!response.ok) {
-            throw new Error("Не удалось войти");
-        }
+@app.route("/")
+def index():
+    return jsonify({"server": "Raspberry Pi File API", "status": "online"})
 
-        const data = await response.json();
-        currentUser = data;
-        showCloud();
-        await loadFiles();
-    } catch (error) {
-        alert("Ошибка входа. Проверьте правильность введенного Gmail.");
-    }
-});
+@app.route("/auth/login", methods=["POST"])
+def login():
+    data = request.get_json(silent=True) or {}
+    email = data.get("email", "").strip()
+    username = data.get("username", "").strip()
 
-// ======================================================
-// CHECK LOGIN
-// ======================================================
+    if not email or "@" not in email:
+        return jsonify({"error": "Valid Gmail required"}), 400
 
-async function checkLogin() {
-    try {
-        const response = await fetch(`${API}/auth/me`, {
-            credentials: "include"
-        });
+    if not username:
+        username = email.split("@")[0]
 
-        if (!response.ok) {
-            showLogin();
-            return;
-        }
+    # Email используется как уникальный ID для папки на сервере[cite: 1, 2, 3, 4]
+    session["user_id"] = email
+    session["email"] = email
+    session["username"] = username
 
-        const user = await response.json();
-        currentUser = user;
-        showCloud();
-        await loadFiles();
-    } catch (error) {
-        showLogin();
-    }
-}
+    user_dir = safe_user_directory(email)
+    email_file = user_dir / ".email"
+    email_file.write_text(email, encoding="utf-8")
 
-// ======================================================
-// SHOW LOGIN / CLOUD
-// ======================================================
+    return jsonify({
+        "status": "logged_in",
+        "email": email,
+        "username": username
+    })
 
-function showLogin() {
-    loginSection.classList.remove("hidden");
-    cloudSection.classList.add("hidden");
-    userInfo.textContent = "Не выполнен вход";
-}
+@app.route("/auth/me")
+def auth_me():
+    user_id = session.get("user_id")
+    if not user_id:
+        return jsonify({"authenticated": False}), 401
 
-function showCloud() {
-    loginSection.classList.add("hidden");
-    cloudSection.classList.remove("hidden");
-    if (currentUser) {
-        userInfo.textContent = `${currentUser.username} (${currentUser.email})`;
-    }
-}
+    return jsonify({
+        "authenticated": True,
+        "email": session.get("email"),
+        "username": session.get("username", user_id)
+    })
 
-// ======================================================
-// LOGOUT
-// ======================================================
+@app.route("/auth/logout", methods=["POST"])
+def auth_logout():
+    session.clear()
+    return jsonify({"status": "logged_out"})
 
-logoutButton.addEventListener("click", async () => {
-    try {
-        await fetch(`${API}/auth/logout`, {
-            method: "POST",
-            credentials: "include"
-        });
-    } finally {
-        currentUser = null;
-        showLogin();
-    }
-});
+@app.route("/files")
+def list_files():
+    user_id = require_user()
+    if not user_id:
+        return jsonify({"error": "Authentication required"}), 401
 
-// ======================================================
-// LOAD FILES & RENDER
-// ======================================================
+    requested_folder = request.args.get("folder", "")
+    try:
+        directory = safe_user_path(user_id, requested_folder)
+    except ValueError:
+        return jsonify({"error": "Invalid path"}), 403
 
-async function loadFiles() {
-    fileList.innerHTML = `<div class="loading">Загрузка файлов...</div>`;
-    try {
-        const url = `${API}/files?folder=${encodeURIComponent(currentFolder)}`;
-        const response = await fetch(url, { credentials: "include" });
+    if not directory.exists():
+        return jsonify([])
 
-        if (!response.ok) {
-            if (response.status === 401) showLogin();
-            throw new Error(`HTTP ${response.status}`);
-        }
+    result = []
+    for item in directory.iterdir():
+        try:
+            relative = item.relative_to(safe_user_directory(user_id))
+        except ValueError:
+            continue
 
-        const data = await response.json();
-        const files = Array.isArray(data) ? data : [];
-        renderFiles(files);
-        updateUserStorage(files);
+        if item.is_dir():
+            result.append({"name": item.name, "path": str(relative), "size": 0, "type": "directory"})
+        elif item.is_file():
+            result.append({"name": item.name, "path": str(relative), "size": item.stat().st_size, "type": "file"})
 
-        currentPath.textContent = currentFolder ? `Мои файлы / ${currentFolder}` : "Мои файлы";
-    } catch (error) {
-        fileList.innerHTML = `
-            <div class="error">
-                ❌ Не удалось получить список файлов
-                <br><small>${escapeHtml(error.message)}</small>
-            </div>
-        `;
-    }
-}
+    return jsonify(result)
 
-function renderFiles(files) {
-    fileList.innerHTML = "";
-    if (files.length === 0) {
-        fileList.innerHTML = `<div class="empty">📂 Папка пуста</div>`;
-        return;
-    }
+@app.route("/upload", methods=["POST"])
+def upload():
+    user_id = require_user()
+    if not user_id:
+        return jsonify({"error": "Authentication required"}), 401
 
-    files.forEach(file => {
-        const element = document.createElement("div");
-        element.className = "file";
-        const icon = getFileIcon(file.name, file.type);
-        const size = formatBytes(file.size);
+    uploaded_file = request.files.get("file")
+    if not uploaded_file:
+        return jsonify({"error": "No file"}), 400
 
-        element.innerHTML = `
-            <div class="file-info">
-                <div class="file-icon">${icon}</div>
-                <div>
-                    <div class="file-name">${escapeHtml(file.name)}</div>
-                    <div class="file-size">${file.type === "directory" ? "Папка" : size}</div>
-                </div>
-            </div>
-            <div class="file-actions">
-                ${file.type === "file" ? `
-                    <button class="download" onclick="downloadFile('${escapeAttribute(file.path)}')">⬇️</button>
-                    <button class="more" onclick="fileInfo('${escapeAttribute(file.path)}')">ℹ️</button>
-                ` : `
-                    <button onclick="openFolder('${escapeAttribute(file.path)}')">📂 Открыть</button>
-                `}
-                <button class="delete" onclick="deleteFile('${escapeAttribute(file.path)}')">🗑️</button>
-            </div>
-        `;
-        fileList.appendChild(element);
-    });
-}
+    folder = request.form.get("folder", "")
+    try:
+        directory = safe_user_path(user_id, folder)
+        directory.mkdir(parents=True, exist_ok=True)
+        target = safe_user_path(user_id, str(Path(folder) / uploaded_file.filename))
+    except ValueError:
+        return jsonify({"error": "Invalid path"}), 403
 
-function openFolder(path) {
-    currentFolder = decodeURIComponent(path);
-    loadFiles();
-}
+    uploaded_file.save(target)
+    return jsonify({"status": "uploaded", "name": uploaded_file.filename})
 
-folderButton.addEventListener("click", async () => {
-    const name = prompt("Введите название новой папки:");
-    if (!name) return;
+@app.route("/download")
+def download():
+    user_id = require_user()
+    if not user_id:
+        return jsonify({"error": "Authentication required"}), 401
 
-    try {
-        const response = await fetch(`${API}/folders`, {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ name: name, folder: currentFolder })
-        });
-        if (!response.ok) throw new Error(await response.text());
-        await loadFiles();
-    } catch (error) {
-        alert(`Не удалось создать папку.\n\n${error.message}`);
-    }
-});
+    relative_path = request.args.get("path", "")
+    try:
+        target = safe_user_path(user_id, relative_path)
+    except ValueError:
+        return jsonify({"error": "Invalid path"}), 403
 
-function downloadFile(path) {
-    window.open(`${API}/download?path=${encodeURIComponent(path)}`, "_blank");
-}
+    if not target.is_file():
+        return jsonify({"error": "File not found"}), 404
 
-async function deleteFile(path) {
-    const filename = decodeURIComponent(path);
-    if (!confirm(`Удалить "${filename}"?`)) return;
+    return send_file(target, as_attachment=True)
 
-    try {
-        const response = await fetch(`${API}/files?path=${encodeURIComponent(path)}`, {
-            method: "DELETE",
-            credentials: "include"
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
-        await loadFiles();
-    } catch (error) {
-        alert(`Не удалось удалить файл.\n\n${error.message}`);
-    }
-}
+@app.route("/files", methods=["DELETE"])
+def delete_file():
+    user_id = require_user()
+    if not user_id:
+        return jsonify({"error": "Authentication required"}), 401
 
-async function fileInfo(path) {
-    try {
-        const response = await fetch(`${API}/file-info?path=${encodeURIComponent(path)}`, { credentials: "include" });
-        if (!response.ok) throw new Error("Ошибка");
-        const data = await response.json();
-        alert(`Файл: ${data.name}\n\nРазмер: ${formatBytes(data.size)}\nТип: ${data.type}\nИзменён: ${data.modified}`);
-    } catch (error) {
-        alert("Не удалось получить информацию о файле.");
-    }
-}
+    relative_path = request.args.get("path", "")
+    try:
+        target = safe_user_path(user_id, relative_path)
+    except ValueError:
+        return jsonify({"error": "Invalid path"}), 403
 
-uploadButton.addEventListener("click", () => fileInput.click());
+    if not target.exists():
+        return jsonify({"error": "Not found"}), 404
 
-fileInput.addEventListener("change", async () => {
-    const file = fileInput.files[0];
-    if (!file) return;
+    if target.is_dir():
+        shutil.rmtree(target)
+    else:
+        target.unlink()
 
-    const formData = new FormData();
-    formData.append("file", file);
-    formData.append("folder", currentFolder);
+    return jsonify({"status": "deleted"})
 
-    try {
-        uploadButton.disabled = true;
-        uploadButton.textContent = "⏳ Загрузка...";
+@app.route("/folders", methods=["POST"])
+def create_folder():
+    user_id = require_user()
+    if not user_id:
+        return jsonify({"error": "Authentication required"}), 401
 
-        const response = await fetch(`${API}/upload`, {
-            method: "POST",
-            credentials: "include",
-            body: formData
-        });
-        if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    data = request.get_json(silent=True) or {}
+    name = data.get("name", "")
+    folder = data.get("folder", "")
 
-        fileInput.value = "";
-        await loadFiles();
-    } catch (error) {
-        alert(`Ошибка загрузки.\n\n${error.message}`);
-    } finally {
-        uploadButton.disabled = false;
-        uploadButton.textContent = "⬆️ Загрузить файл";
-    }
-});
+    if not name:
+        return jsonify({"error": "Folder name required"}), 400
 
-refreshButton.addEventListener("click", loadFiles);
+    try:
+        target = safe_user_path(user_id, str(Path(folder) / name))
+        target.mkdir(parents=False, exist_ok=False)
+    except FileExistsError:
+        return jsonify({"error": "Folder already exists"}), 409
+    except ValueError:
+        return jsonify({"error": "Invalid path"}), 403
 
-function updateUserStorage(files) {
-    let total = 0;
-    files.forEach(file => {
-        if (file.type === "file") total += Number(file.size) || 0;
-    });
-    userStorage.textContent = formatBytes(total);
-}
+    return jsonify({"status": "created"})
 
-function getFileIcon(name, type) {
-    if (type === "directory") return "📁";
-    const extension = name.split(".").pop().toLowerCase();
-    if (["jpg", "jpeg", "png", "gif", "webp", "heic"].includes(extension)) return "🖼️";
-    if (["mp4", "mov", "avi", "mkv"].includes(extension)) return "🎬";
-    if (["mp3", "wav", "flac", "ogg"].includes(extension)) return "🎵";
-    if (["zip", "rar", "7z", "tar", "gz"].includes(extension)) return "📦";
-    if (extension === "pdf") return "📕";
-    if (["doc", "docx"].includes(extension)) return "📘";
-    if (["xls", "xlsx"].includes(extension)) return "📊";
-    if (["js", "java", "py", "cpp", "c", "html", "css"].includes(extension)) return "💻";
-    return "📄";
-}
+@app.route("/file-info")
+def file_info():
+    user_id = require_user()
+    if not user_id:
+        return jsonify({"error": "Authentication required"}), 401
 
-// ADMIN PANEL LOGIC
-const adminLink = document.getElementById("adminLink");
-const adminModal = document.getElementById("adminModal");
-const closeAdmin = document.getElementById("closeAdmin");
-const adminPassword = document.getElementById("adminPassword");
-const adminLoginButton = document.getElementById("adminLoginButton");
-const adminLogin = document.getElementById("adminLogin");
-const adminPanel = document.getElementById("adminPanel");
-const adminError = document.getElementById("adminError");
+    relative_path = request.args.get("path", "")
+    try:
+        target = safe_user_path(user_id, relative_path)
+    except ValueError:
+        return jsonify({"error": "Invalid path"}), 403
 
-adminLink.addEventListener("click", () => {
-    adminModal.classList.remove("hidden");
-    adminLogin.classList.remove("hidden");
-    adminPanel.classList.add("hidden");
-    adminPassword.value = "";
-    adminError.textContent = "";
-});
+    if not target.exists():
+        return jsonify({"error": "Not found"}), 404
 
-closeAdmin.addEventListener("click", () => adminModal.classList.add("hidden"));
-adminLoginButton.addEventListener("click", adminLoginRequest);
-adminPassword.addEventListener("keydown", event => {
-    if (event.key === "Enter") adminLoginRequest();
-});
+    stat = target.stat()
+    return jsonify({
+        "name": target.name,
+        "size": stat.st_size,
+        "type": "directory" if target.is_dir() else "file",
+        "modified": datetime.fromtimestamp(stat.st_mtime).isoformat()
+    })
 
-async function adminLoginRequest() {
-    const password = adminPassword.value;
-    if (!password) return;
+@app.route("/admin/login", methods=["POST"])
+def admin_login():
+    if not ADMIN_PASSWORD:
+        return jsonify({"error": "Admin password is not configured"}), 500
 
-    adminLoginButton.disabled = true;
-    try {
-        const response = await fetch(`${API}/admin/login`, {
-            method: "POST",
-            credentials: "include",
-            headers: { "Content-Type": "application/json" },
-            body: JSON.stringify({ password: password })
-        });
-        if (!response.ok) {
-            adminError.textContent = "❌ Неверный пароль";
-            return;
-        }
-        adminLogin.classList.add("hidden");
-        adminPanel.classList.remove("hidden");
-        await loadAdminStats();
-    } catch (error) {
-        adminError.textContent = "Ошибка подключения к серверу.";
-    } finally {
-        adminLoginButton.disabled = false;
-    }
-}
+    data = request.get_json(silent=True) or {}
+    password = data.get("password", "")
 
-async function loadAdminStats() {
-    try {
-        const response = await fetch(`${API}/admin/stats`, { credentials: "include" });
-        if (!response.ok) throw new Error("Access denied");
-        const data = await response.json();
+    if not secrets.compare_digest(password, ADMIN_PASSWORD):
+        return jsonify({"error": "Invalid password"}), 401
 
-        document.getElementById("adminUsers").textContent = data.users;
-        document.getElementById("adminUsed").textContent = formatBytes(data.used);
-        document.getElementById("adminFree").textContent = formatBytes(data.free);
-        document.getElementById("adminTotal").textContent = formatBytes(data.total);
+    session["admin"] = True
+    return jsonify({"status": "authenticated"})
 
-        const list = document.getElementById("adminUserList");
-        list.innerHTML = "";
-        data.user_emails.forEach(email => {
-            const element = document.createElement("div");
-            element.className = "admin-user";
-            element.textContent = email;
-            list.appendChild(element);
-        });
-    } catch (error) {
-        alert("Не удалось загрузить статистику.");
-    }
-}
+@app.route("/admin/stats")
+def admin_stats():
+    if not require_admin():
+        return jsonify({"error": "Admin authentication required"}), 403
 
-function escapeHtml(text) {
-    const div = document.createElement("div");
-    div.textContent = text;
-    return div.innerHTML;
-}
+    total_used = 0
+    user_emails = []
 
-function escapeAttribute(text) {
-    return encodeURIComponent(text);
-}
+    for user_directory in USERS_ROOT.iterdir():
+        if not user_directory.is_dir():
+            continue
+        for file in user_directory.rglob("*"):
+            if file.is_file():
+                try:
+                    total_used += file.stat().st_size
+                except OSError:
+                    pass
 
-function formatBytes(bytes) {
-    if (!bytes || bytes === 0) return "0 B";
-    const units = ["B", "KB", "MB", "GB", "TB"];
-    const i = Math.floor(Math.log(bytes) / Math.log(1024));
-    return (bytes / Math.pow(1024, i)).toFixed(i === 0 ? 0 : 2) + " " + units[i];
-}
+        email_file = user_directory / ".email"
+        if email_file.exists():
+            try:
+                email = email_file.read_text(encoding="utf-8").strip()
+                if email:
+                    user_emails.append(email)
+            except OSError:
+                pass
 
-checkServer();
-checkLogin();
+    free = max(0, TOTAL_STORAGE - total_used)
+    return jsonify({
+        "users": len(user_emails),
+        "used": total_used,
+        "free": free,
+        "total": TOTAL_STORAGE,
+        "user_emails": user_emails
+    })
+
+if __name__ == "__main__":
+    app.run(host="0.0.0.0", port=5000, debug=False)
