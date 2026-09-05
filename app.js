@@ -7,7 +7,9 @@ const API = "https://proof-screens-atm-weights.trycloudflare.com";
 const status = document.getElementById("status");
 const loginSection = document.getElementById("loginSection");
 const cloudSection = document.getElementById("cloudSection");
-const googleLoginButton = document.getElementById("googleLoginButton");
+const loginForm = document.getElementById("loginForm");
+const emailInput = document.getElementById("emailInput");
+const usernameInput = document.getElementById("usernameInput");
 const logoutButton = document.getElementById("logoutButton");
 const userInfo = document.getElementById("userInfo");
 const fileList = document.getElementById("fileList");
@@ -38,14 +40,34 @@ async function checkServer() {
 }
 
 // ======================================================
-// GOOGLE LOGIN
+// LOGIN FORM HANDLER
 // ======================================================
 
-googleLoginButton.addEventListener("click", () => {
+loginForm.addEventListener("submit", async (e) => {
+    e.preventDefault();
+    const email = emailInput.value.trim();
+    const username = usernameInput.value.trim();
+
+    if (!email) return;
+
     try {
-        window.location.href = `${API}/auth/google`;
+        const response = await fetch(`${API}/auth/login`, {
+            method: "POST",
+            credentials: "include",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({ email, username })
+        });
+
+        if (!response.ok) {
+            throw new Error("Не удалось войти");
+        }
+
+        const data = await response.json();
+        currentUser = data;
+        showCloud();
+        await loadFiles();
     } catch (error) {
-        alert("Не удалось начать вход через Google.");
+        alert("Ошибка входа. Проверьте правильность введенного Gmail.");
     }
 });
 
@@ -87,7 +109,7 @@ function showCloud() {
     loginSection.classList.add("hidden");
     cloudSection.classList.remove("hidden");
     if (currentUser) {
-        userInfo.textContent = currentUser.email;
+        userInfo.textContent = `${currentUser.username} (${currentUser.email})`;
     }
 }
 
